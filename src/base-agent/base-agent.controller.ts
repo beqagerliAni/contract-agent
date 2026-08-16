@@ -21,7 +21,7 @@ export abstract class BaseAgentController {
       agentName?: string
     },
     @UploadedFile() file?: Express.Multer.File,
-  ): Promise<boolean> {
+  ): Promise<string> {
     return this.baseAgentService.sendStreamMessage(data.message, data.threadId, data.agentName || "ContractAgent", file);
   }
 }
