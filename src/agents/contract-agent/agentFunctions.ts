@@ -8,6 +8,10 @@ import { CreateGmailDraft } from './functions/email/create-draft/email.gpt-funct
 import { createGmailDraftProcessor } from './functions/email/create-draft/email.function-processors';
 import { SendGmailEmail } from './functions/email/send-email/sendEmail.gpt-function';
 import { sendGmailEmailProcessor } from './functions/email/send-email/sendEmail.function-processors';
+import { CreateReviewCard } from './functions/trello/review-card/reviewCard.gpt-function';
+import { createReviewCardProcessor } from './functions/trello/review-card/reviewCard.function-processors';
+import { CreateApprovedCard } from './functions/trello/approved-card/approvedCard.gpt-function';
+import { createApprovedCardProcessor } from './functions/trello/approved-card/approvedCard.function-processors';
 
 export const ContractAgentFunctions: Record<string, AvailableFunctionsType> = {
   [FunctionName.searchKnownClients]: {
@@ -25,5 +29,13 @@ export const ContractAgentFunctions: Record<string, AvailableFunctionsType> = {
   [FunctionName.sendGmailEmail]: {
     gptFunction: SendGmailEmail,
     processor: sendGmailEmailProcessor,
+  },
+  [FunctionName.createReviewCard]: {
+    gptFunction: CreateReviewCard,
+    processor: createReviewCardProcessor,
+  },
+  [FunctionName.createApprovedCard]: {
+    gptFunction: CreateApprovedCard,
+    processor: createApprovedCardProcessor,
   },
 };
