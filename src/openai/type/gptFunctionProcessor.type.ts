@@ -1,8 +1,6 @@
-import { Subscriber } from 'rxjs';
+import { OpenSearchService } from "src/opensearch/opensearch.service";
 
 export type GptFunctionProcessor = (
   args: any,
-  agentName?: string | null,
-  functionName?: string | null,
-  observer?: Subscriber<MessageEvent>,
+  openSearchService: OpenSearchService
 ) => Promise<string>;

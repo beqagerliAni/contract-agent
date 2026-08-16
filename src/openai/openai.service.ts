@@ -20,25 +20,13 @@ export class OpenaiService {
     });
   }
 
-  async getMessage(threadId: string) {
-   const items = await this.client.conversations.items.list(threadId);
-   const conversation = items.data.map((item) => {
-     if(item.type === 'message') {
-      // dont return hole data
-       return {
-        role: item.role,
-        message: item.content[0].type === 'output_text'? item.content[0].text : item.content[0]
-       }
-     }
-   })
-   return conversation
-  }
   async responseStreamMessage(
     message: string,
     agentDef: AgentDefinition,
     threadId: string,
     functionCallhandler: FunctionCallHandler,
     callBacks: StreamCallbacks,
+    fileText: string | undefined = undefined,
   ): Promise<void> {
     try {
       const argBuffers: ArgsBuffer = {};
@@ -51,12 +39,18 @@ export class OpenaiService {
         | { role: 'system'; content: string }
         | { type: 'function_call_output'; call_id: string; output: string }
       > = [
-        {
-          role: 'user',
-          content: `Today's date is ${date}`,
-        },
-      ];
+          {
+            role: 'user',
+            content: `Today's date is ${date}`,
+          },
+        ];
       input.push({ role: 'user', content: message });
+      if (typeof fileText !== 'undefined') {
+        input.push({
+          role: 'system',
+          content: `The user attached a file. Base your answer on its contents below, quote the exact wording when it matters, and say plainly if something they ask for is not in it.\n\n${fileText}`,
+        });
+      }
       const MAX_ROUNDS = 5;
       for (let round = 0; round < MAX_ROUNDS; round++) {
         let sawFunctionCall = false;
@@ -88,14 +82,13 @@ export class OpenaiService {
               break;
             }
             case 'response.completed': {
-              // Only signal completed if there was no function call this round
               if (!sawFunctionCall) callBacks.onCompleted();
             }
             default:
               break;
           }
         }
-        // we whont have to use any function call thats it
+
         if (!sawFunctionCall) return;
 
         const pendingIds = Object.keys(argBuffers);
