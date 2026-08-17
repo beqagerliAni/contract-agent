@@ -1,5 +1,8 @@
+import { Logger } from '@nestjs/common';
 import { GptFunctionProcessor } from 'src/openai/type/gptFunctionProcessor.type';
 import { SearchPoliciesArgs } from './type/searchPolicies.type';
+
+const logger = new Logger('SearchPolicies');
 
 export const searchPoliciesProcessor: GptFunctionProcessor = async (
   gptArgs: string,
@@ -21,7 +24,10 @@ export const searchPoliciesProcessor: GptFunctionProcessor = async (
 
     return JSON.stringify(policies);
   } catch (error) {
-    console.error('Error in searchPoliciesProcessor:', error);
+    logger.error(
+      'Error in searchPoliciesProcessor:',
+      error instanceof Error ? error.stack : String(error),
+    );
     return JSON.stringify({
       error: 'Failed to look the policies up in the knowledge base',
     });

@@ -9,15 +9,23 @@ export const CreateGmailDraft: FunctionTool = {
 
 Use this tool when a contract has been flagged for review and a follow-up email to the counterparty (or an internal reviewer) is needed.
 
+Only call this when something is actually wrong with the contract. If every check passed — counterparty known, no term outside policy, all fields present, signed — this is the wrong tool: the contract is auto-approved and belongs to send_gmail_email. A contract where you can name no concrete problem has not been flagged.
+
 Never use this tool to send an email directly — a human must always review and submit the draft themselves. Do not tell the user the email has been sent, only that a draft is waiting for them in Drafts.
 
-You do not write the email layout. Provide the facts as separate fields and the system renders the formatted HTML email from them. Write every field in plain prose with no markdown and no HTML tags.`,
+You do not write the email layout. Provide the facts as separate fields and the system renders the formatted HTML email from them. Write every field in plain prose with no markdown and no HTML tags.
+
+"to" must be a real email address, never a person's or company's name. The address is normally the sender of the message the contract arrived in. If no address appears anywhere in the conversation or the document, do not call this tool and do not invent one — say which address you are missing and ask for it.`,
   parameters: {
     type: 'object',
     properties: {
       to: {
         type: 'string',
-        description: 'Recipient email address.',
+        description: `Recipient email address, for example "marcus.feld@halberdlogistics.com".
+
+Must be a full address containing "@" and a domain. A person's name or a company name is NOT a valid value — "Marcus Feld" and "Halberd Logistics Partners LLC" are both wrong, "marcus.feld@halberdlogistics.com" is right.
+
+Take it from the sender of the message the contract came in with, or from a contact address written in the contract itself. Never guess an address, never build one from the company name, and never leave it as a name because you could not find the address — ask for it instead.`,
       },
       subject: {
         type: 'string',

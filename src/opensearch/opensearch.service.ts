@@ -5,6 +5,10 @@ import { SearchParamType } from "./type/searchParam.type";
 import { getIndexConfig } from "./mapping";
 import { IndexableDocument } from "./type/indexConfig.type";
 
+// small corpora here, returning a few extra rows costs nothing and stops a
+// relevant policy or company being crowded out
+const DEFAULT_KNN_K = 10
+
 @Injectable()
 export class OpenSearchService {
     constructor() { }
@@ -69,16 +73,22 @@ export class OpenSearchService {
             filter.push({ term: { type: searchParam.type } })
         }
 
+        // k is how many neighbours the knn walk keeps. our filters are applied AFTER that
+        // (opensearch 1.3 has no filtered knn), so k has to be comfortably bigger than the
+        // number of results we actually want or the filter can leave us with nothing
+        const k = searchParam.k ?? DEFAULT_KNN_K
+
         const result = await this.client.search({
             index: indexName,
             body: {
+                size: k,
                 _source: { excludes: ['embedding'] },
                 query: {
                     bool: {
                         must: [
                             {
                                 knn: {
-                                    embedding: { vector: queryEmbedding, k: 3 }
+                                    embedding: { vector: queryEmbedding, k }
                                 }
                             }
                         ],

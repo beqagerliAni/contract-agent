@@ -11,6 +11,10 @@ Use this tool immediately after create_gmail_draft succeeds, so the flagged cont
 
 The card should summarize the contract and list the specific reasons it was flagged, so a reviewer scanning the board understands what to check without opening anything else first. Give every reason you flagged it, not just the most serious one, and put the actual numbers in the detail — "auto-renews for 24 months, our limit is 12" tells a reviewer more than "renewal term too long".
 
+"reasons" is a list of PROBLEMS ONLY. A check that passed is not a reason. Never write an entry that says a term is within policy, is compliant, or is acceptable — a reviewer reading this card must see only what is wrong with the contract.
+
+If you find yourself with nothing to put in "reasons", or every entry you were going to write says the term was fine, then the contract was not actually flagged and this is the wrong tool. Stop, and use send_gmail_email followed by create_approved_card instead.
+
 You do not write the card layout. Provide the facts as separate fields and the system renders the card. Write every field in plain prose with no markdown and no HTML tags.`,
   parameters: {
     type: 'object',
@@ -45,12 +49,14 @@ You do not write the card layout. Provide the facts as separate fields and the s
             reason: {
               type: 'string',
               description:
-                'Short label for the problem, for example "Auto-renewal term" or "Unknown counterparty".',
+                'Short label for the problem, for example "Auto-renewal term exceeds policy" or "Unknown counterparty".',
             },
             detail: {
               type: 'string',
               description:
-                'What was found and what was expected, with the actual values, for example "24 months, policy limit is 12 months".',
+                `What is wrong, with the actual values, for example "24 months, policy limit is 12 months".
+
+This must describe a failure. Never write that a term is within policy, compliant, or acceptable — if that is what you would write, the term is not a reason and does not belong on this card.`,
             },
           },
           required: ['reason', 'detail'],

@@ -1,4 +1,4 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, Logger } from '@nestjs/common';
 import { agentsDefinitions } from 'src/agents/agentDefinitions';
 import { OpenaiService } from 'src/openai/openai.service';
 import { OpenSearchService } from 'src/opensearch/opensearch.service';
@@ -6,6 +6,8 @@ import { extractFileText } from 'src/shared/util/extractText.util';
 
 @Injectable()
 export abstract class BaseAgentService {
+  private readonly logger = new Logger(BaseAgentService.name);
+
   constructor(private openaiService: OpenaiService, private opensearchService: OpenSearchService) { }
 
   async createThread(agentName: string) {
@@ -23,7 +25,6 @@ export abstract class BaseAgentService {
     let fileInformation: undefined | string = undefined
     if (typeof file !== 'undefined') {
       fileInformation = await extractFileText(file.buffer)
-      console.log(fileInformation)
     }
     const agentDef = this.getAgentDef(agentName);
     await this.openaiService.responseStreamMessage(
@@ -34,30 +35,26 @@ export abstract class BaseAgentService {
         return agentDef.functions[name].processor(args, this.opensearchService);
       },
       {
-        onThreadRunCreated: function (): void {
-          console.log('ThreadHasCreated');
+        onThreadRunCreated: (): void => {
+          this.logger.debug(`Thread run created for thread ${threadId}`);
         },
-        onDelta: function (textDelta: string): void {
+        onDelta: (textDelta: string): void => {
           messageChunk += textDelta;
         },
-        onToolCall: function (info: {
+        onToolCall: (info: {
           status: 'calling' | 'finished';
           name?: string;
-        }): void {
-          // we would have some logging or somekind of system that would tell
-          // what kind of tools did agent use also if we had front we would just send some event
-          console.log(
-            'ToolCall Status: ',
-            info.status,
-            'ToolCall Info: ',
-            info.name,
+        }): void => {
+          this.logger.log(`Tool ${info.name} ${info.status}`);
+        },
+        onCompleted: (): void => {
+          this.logger.debug(`Agent finished response: ${messageChunk}`);
+        },
+        onError: (e: unknown): void => {
+          this.logger.error(
+            'Agent stream failed',
+            e instanceof Error ? e.stack : String(e),
           );
-        },
-        onCompleted: function (): void {
-          console.log('Agent finished response: ', messageChunk);
-        },
-        onError: function (e: unknown): void {
-          console.log('Agent has faced Error: ', e);
         },
       },
       fileInformation

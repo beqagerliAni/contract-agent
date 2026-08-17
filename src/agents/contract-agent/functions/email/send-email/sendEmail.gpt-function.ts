@@ -23,7 +23,11 @@ You do not write the email layout. Provide the facts as separate fields and the 
     properties: {
       to: {
         type: 'string',
-        description: 'Recipient email address, normally the contract sender.',
+        description: `Recipient email address, normally the contract sender, for example "pieter.vandijk@solventbay.com".
+
+Must be a full address containing "@" and a domain. A person's name or a company name is NOT a valid value — "Pieter van Dijk" and "Solvent Bay Manufacturing Co." are both wrong, "pieter.vandijk@solventbay.com" is right.
+
+Take it from the sender of the message the contract came in with, or from a contact address written in the contract itself. This email is sent immediately and cannot be recalled, so never guess an address and never build one from the company name. If you cannot find a real address, do not call this tool — ask for it instead.`,
       },
       subject: {
         type: 'string',
@@ -48,10 +52,10 @@ You do not write the email layout. Provide the facts as separate fields and the 
       threadId: {
         type: 'string',
         description:
-          'Optional. Gmail thread ID to send the reply within an existing email thread, if applicable.',
+          'Gmail thread ID to send the reply within an existing email thread, if applicable.',
       },
     },
-    required: ['to', 'subject', 'counterparty_name', 'message'],
+    required: ['to', 'subject', 'counterparty_name', 'message','threadId'],
     additionalProperties: false,
   },
 };

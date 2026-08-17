@@ -1,8 +1,12 @@
+import { Logger } from '@nestjs/common';
 import { GptFunctionProcessor } from 'src/openai/type/gptFunctionProcessor.type';
-import { WebHookClient } from 'src/agents/webhookClient/webHook.client';
+import { WebHookClient } from 'src/agents/webhook-client/webHook.client';
 import { checkProperty } from 'src/shared/util/checkProperty.util';
+import { checkEmail } from 'src/shared/util/checkEmail.util';
 import { CreateGmailDraftArgs } from '../type/createGmailDraft.type';
 import { buildDraftHtml } from '../emailTemplate.util';
+
+const logger = new Logger('CreateGmailDraft');
 
 export const createGmailDraftProcessor: GptFunctionProcessor = async (
   gptArgs: string,
@@ -19,6 +23,11 @@ export const createGmailDraftProcessor: GptFunctionProcessor = async (
     ]);
     if (validate.erros.length) {
       return JSON.stringify(validate.erros);
+    }
+
+    const emailErrors = checkEmail(args.to);
+    if (emailErrors.length) {
+      return JSON.stringify(emailErrors);
     }
 
     const response = await WebHookClient.post(
@@ -38,7 +47,10 @@ export const createGmailDraftProcessor: GptFunctionProcessor = async (
       note: 'Saved to the Gmail Drafts folder. Nothing was sent, a human still has to review and send it.',
     });
   } catch (error) {
-    console.error('Error in createGmailDraftProcessor:', error);
+    logger.error(
+      'Error in createGmailDraftProcessor:',
+      error instanceof Error ? error.stack : String(error),
+    );
     return JSON.stringify({
       error: 'Failed to create the gmail draft',
     });

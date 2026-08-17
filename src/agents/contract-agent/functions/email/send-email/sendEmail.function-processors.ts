@@ -1,9 +1,13 @@
+import { Logger } from '@nestjs/common';
 import { GptFunctionProcessor } from 'src/openai/type/gptFunctionProcessor.type';
-import { WebHookClient } from 'src/agents/webhookClient/webHook.client';
+import { WebHookClient } from 'src/agents/webhook-client/webHook.client';
 import { checkProperty } from 'src/shared/util/checkProperty.util';
+import { checkEmail } from 'src/shared/util/checkEmail.util';
 import { SendGmailEmailArgs } from '../type/sendGmailEmail.type';
 import { buildApprovalHtml } from '../emailTemplate.util';
 
+
+const logger = new Logger('SendGmailEmail');
 
 export const sendGmailEmailProcessor: GptFunctionProcessor = async (
   gptArgs: string,
@@ -16,9 +20,16 @@ export const sendGmailEmailProcessor: GptFunctionProcessor = async (
       'subject',
       'counterparty_name',
       'message',
+      'threadId'
     ]);
     if (validate.erros.length) {
       return JSON.stringify(validate.erros);
+    }
+
+    // this one sends for real, so we never let a name through as the address
+    const emailErrors = checkEmail(args.to);
+    if (emailErrors.length) {
+      return JSON.stringify(emailErrors);
     }
 
     const response = await WebHookClient.post('q01ry8lp77xdvy2p452o1yhh7rc1wa22', {
@@ -35,7 +46,10 @@ export const sendGmailEmailProcessor: GptFunctionProcessor = async (
       note: 'Sent immediately to the recipient. This cannot be recalled.',
     });
   } catch (error) {
-    console.error('Error in sendGmailEmailProcessor:', error);
+    logger.error(
+      'Error in sendGmailEmailProcessor:',
+      error instanceof Error ? error.stack : String(error),
+    );
     return JSON.stringify({
       error: 'Failed to send the email',
     });

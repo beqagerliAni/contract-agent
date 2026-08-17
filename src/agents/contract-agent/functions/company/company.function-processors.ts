@@ -1,6 +1,9 @@
+import { Logger } from '@nestjs/common';
 import { GptFunctionProcessor } from 'src/openai/type/gptFunctionProcessor.type';
 import { SearchKnownClientsArgs } from './type/searchKnownClients.type';
 import { checkProperty } from 'src/shared/util/checkProperty.util';
+
+const logger = new Logger('SearchKnownClients');
 
 export const searchKnownClientsProcessor: GptFunctionProcessor = async (
   gptArgs: string,
@@ -30,7 +33,10 @@ export const searchKnownClientsProcessor: GptFunctionProcessor = async (
 
     return JSON.stringify(companies);
   } catch (error) {
-    console.error('Error in searchKnownClientsProcessor:', error);
+    logger.error(
+      'Error in searchKnownClientsProcessor:',
+      error instanceof Error ? error.stack : String(error),
+    );
     return JSON.stringify({
       error: 'Failed to look the company up in the knowledge base',
     });
