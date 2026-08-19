@@ -1,85 +1,199 @@
-# Crypto Agent
-Lightweight agent that analyzes crypto market data, reports trends, and helps users decide where to buy/sell. It exposes simple endpoints and uses OpenAI function-calling + streaming to combine model reasoning with deterministic data fetchers.
+# Contract Intake Agent
 
-## HOW TO START THE APP 
-Install dependencies:
+A NestJS service that reads an incoming contract, checks it against internal
+knowledge, and then either **auto-approves** it or **flags it for human review** —
+sending the matching Gmail message and recording the outcome on a Trello board.
+
+The agent is an OpenAI function-calling loop: the model does the reading and the
+judging, six tools do everything deterministic (vector search, email, Trello).
+
+---
+
+## How it decides
+
+The system prompt ([`ContractAgent`](src/agents/contract-agent/contract.agent-def.ts))
+forces the model to write out five explicit checks, each with `PASS`/`FAIL` and the
+values it compared:
+
+| # | Check | Question |
+|---|---------------|--------------------------------------------------------|
+| 1 | `FIELDS`      | counterparty, type, effective date, value, payment terms all present? |
+| 2 | `COUNTERPARTY`| found via `search_known_clients`? |
+| 3 | `POLICY`      | every term inside the limit `search_policies` states? |
+| 4 | `SIGNED`      | signed by both parties? |
+| 5 | `CONFIDENCE`  | was the document clear enough to read all of the above? |
+
+The outcome is *counted*, not weighed:
+
+```
+ZERO FAILs          -> send_gmail_email   then create_approved_card
+ONE OR MORE FAILs   -> create_gmail_draft then create_review_card
+```
+
+Design intent worth knowing:
+
+- A check that could not be completed is a `FAIL`, never a `PASS`.
+- Exactly one email per contract, never both tools.
+- The Trello card comes **after** the email tool succeeds — never before, never alone.
+- `send_gmail_email` goes out immediately and cannot be recalled; a draft is only
+  waiting in Drafts, so the agent must never claim it was sent.
+- A review card's reasons are the `FAIL` lines only. A passing check is never a
+  reason — the tool descriptions repeat this because it is the failure mode the
+  model falls into most.
+
+## Architecture
+
+```
+POST /contract-agent  (message + optional PDF)
+        │
+        ├─ extractFileText ──── pdfjs → plain text, injected as a system message
+        │
+        ▼
+BaseAgentService ──► OpenaiService.responseStreamMessage
+                       │  streams deltas, buffers function_call args,
+                       │  loops up to MAX_ROUNDS = 5 tool rounds
+                       ▼
+              agentDef.functions[name].processor(args, openSearchService)
+                       │
+        ┌──────────────┼───────────────┬──────────────────┐
+        ▼              ▼               ▼                  ▼
+ search_known_clients  search_policies  gmail tools       trello tools
+ (OpenSearch kNN)      (OpenSearch kNN)  (Make webhook)   (Make webhook)
+```
+
+### Layers
+
+| Path | Role |
+|------|------|
+| [`src/base-agent/`](src/base-agent) | Abstract controller + service: thread creation, streaming, file extraction, tool dispatch. Reusable by any agent. |
+| [`src/contract/`](src/contract) | The concrete agent — `ContractAgentController`/`Service` just extend the base and mount at `/contract-agent`. |
+| [`src/openai/`](src/openai/openai.service.ts) | Thin wrapper over the OpenAI **Responses + Conversations** API. Owns the stream loop and the tool-call round-trip. |
+| [`src/agents/`](src/agents) | Agent definitions: system prompt, model, and the tool registry. |
+| [`src/opensearch/`](src/opensearch) | Embedding + kNN retrieval, index mappings, ingest endpoints. |
+| [`src/shared/util/`](src/shared/util) | PDF text extraction, email validation, required-field checks, date formatting. |
+
+Adding an agent = one entry in [`agentsDefinitions`](src/agents/agentDefinitions.ts)
+plus a controller extending `BaseAgentController`. Adding a tool = a `FunctionTool`
+spec + a processor, wired in [`agentFunctions.ts`](src/agents/contract-agent/agentFunctions.ts).
+
+## Tools
+
+| Tool | Implementation | What it does |
+|------|----------------|--------------|
+| `search_known_clients` | [company](src/agents/contract-agent/functions/company) | kNN search over the `companies` index to confirm the counterparty is a known client/vendor. Optional `type` filter. |
+| `search_policies` | [policy](src/agents/contract-agent/functions/policy) | kNN search over the `policies` index. Returns policy **text only** — the comparison is the model's job. |
+| `create_gmail_draft` | [create-draft](src/agents/contract-agent/functions/email/create-draft) | Saves a draft for a human to send. Renders HTML incl. a Term / In contract / Policy limit table. |
+| `send_gmail_email` | [send-email](src/agents/contract-agent/functions/email/send-email) | Sends the approval confirmation immediately. |
+| `create_review_card` | [review-card](src/agents/contract-agent/functions/trello/review-card) | Card on **Needs Review**, listing every `FAIL` with real numbers. |
+| `create_approved_card` | [approved-card](src/agents/contract-agent/functions/trello/approved-card) | Card on **Sent / Auto-Approved**, with the checks-passed audit trail. |
+
+The model never writes markup. It supplies structured fields and the service
+renders them — [`emailTemplate.util.ts`](src/agents/contract-agent/functions/email/emailTemplate.util.ts)
+(HTML, escaped) and [`trelloCard.util.ts`](src/agents/contract-agent/functions/trello/trelloCard.util.ts)
+(markdown, pipes/backticks neutralised). Gmail and Trello are both reached through
+Make.com webhooks via [`WebHookClient`](src/agents/webhook-client/webHook.client.ts).
+
+Every processor returns a JSON **string**, including its errors — a validation
+failure (`checkProperty`, `checkEmail`) is fed back to the model as tool output so
+it can correct itself rather than throwing.
+
+## Retrieval
+
+[`OpenSearchService`](src/opensearch/opensearch.service.ts) embeds text with
+`text-embedding-3-small` (1536-dim) and searches HNSW/faiss `knn_vector` fields.
+
+Because this OpenSearch version has no filtered kNN, the `term` filters are applied
+*after* the kNN walk — so `k` (default `10`) is deliberately larger than the number
+of rows actually wanted, or a filter can leave the result set empty.
+
+Indices are declared in one place, [`mapping/index.ts`](src/opensearch/mapping/index.ts):
+a mapping, a Zod schema, and the field echoed back after ingest. Both indices
+require a `content` field — that is what gets embedded.
+
+| Index | Schema |
+|-------|--------|
+| `companies` | [`CompanySchema`](src/agents/contract-agent/schema/company.schema.ts) — name, type, status, industry, risk level, notes |
+| `policies`  | [`PolicySchema`](src/agents/contract-agent/schema/policy.schema.ts) — policy id, category, title, rule |
+
+## API
+
+### Agent
+
+```http
+POST /contract-agent/createThread
+{ "name": "ContractAgent" }
+```
+Creates an OpenAI conversation seeded with the agent's system prompt. Returns the
+conversation object — keep its `id` as `threadId`.
+
+```http
+POST /contract-agent
+Content-Type: multipart/form-data
+
+message=Please process the attached contract from marcus.feld@halberdlogistics.com
+threadId=conv_...
+agentName=ContractAgent        # optional, defaults to ContractAgent
+file=@contract.pdf             # optional
+```
+Runs the agent and responds with the assembled assistant text. A PDF is parsed to
+text and attached as a system message. Deltas and tool calls are surfaced through
+[`StreamCallbacks`](src/openai/interface/callBacks.interface.ts) — currently logged
+server-side; wire them to SSE/WS to stream to a client.
+
+### Knowledge base
+
+```http
+POST /opensearch/index?index=companies          # create index if absent
+POST /opensearch/document?index=policies        # body: array of documents
+[{ "policy_id": "PAY-01", "category": "payment", "title": "Payment terms",
+   "rule": "Net 30 maximum", "content": "Payment terms must not exceed Net 30 days." }]
+```
+The `index` query param selects the Zod schema documents are validated against.
+
+## Setup
+
+```bash
 npm install
+cp .env.example .env      # then fill it in
+npm run build
+npm run start:dev         # http://localhost:3001
+```
 
-Create a .env file, copy env.example
+### Environment
 
-install dep: npm i
-run build: npm run  build
-start: npm run start:dev
+| Variable | Required | Notes |
+|----------|----------|-------|
+| `OPENAI_API_KEY` | yes | chat + embeddings |
+| `OPENSEARCH_NODE` | yes | e.g. `https://user:pass@host:9200` (TLS verification is disabled in the client) |
+| `WEBHOOK_APY_KEY` | yes, for Gmail/Trello | sent as `x-make-apikey` to the Make webhooks |
+| `OPENAI_EMBEDDINGS_MODEL` | no | defaults to `text-embedding-3-small` |
+| `PORT` | no | defaults to `3001` |
 
-The server will run on:
-http://localhost:3000
+Note that `.env.example` currently lists only the first two — the webhook key and
+the embeddings model are read directly from `process.env`.
 
-## Quick overview
-- API entrypoints implemented by [`BaseAgentController`](src/base-agent/base-agent.controller.ts) and extended by [`CryptoController`](src/crypto/crypto.controller.ts) to create threads and stream responses.
-- LLM integration is in [`OpenaiService`](src/openai/openai.service.ts), which streams model output and handles function calls.
-- Agent definition and system prompt live in [`cryptoAgentDefinition`](src/agents/crypto-agent/crypto.agent-def.ts).
-- Available tool functions are listed in [`cryptoAgentFunctions`](src/agents/crypto-agent/agentFunctions.ts) and implemented by processors such as [`CoinFunctionProcessor`](src/agents/crypto-agent/functions/coin/coin.function-processor.ts) and [`TrendingCoinFunctionProcessor`](src/agents/crypto-agent/functions/trending-coin/trendingCoin.function.processor.ts).
-- Thread lifecycle and SSE streaming are handled by [`BaseAgentService`](src/base-agent/base-agent.service.ts).
+### Scripts
 
-## How it feeds data to the LLM — "Why" (LLM Strategy)
-- System-first prompt: the agent uses a clear system prompt (see [`cryptoAgentDefinition`](src/agents/crypto-agent/crypto.agent-def.ts)) to set role, output rules, and available metrics. This reduces hallucination and enforces summary-first outputs.
-- Tooling + function calls: concrete data retrieval is implemented as functions (FunctionTool objects) wired into the model via [`OpenaiService.responseStreamMessage`](src/openai/openai.service.ts). The model decides when to call a function; that function returns structured JSON from deterministic APIs (CoinGecko client in [`crypto.api-client.ts`](src/agents/crypto-agent/apiClient/crypto.api-client.ts)).
-- Streaming + incremental assembly: we stream deltas to the client (SSE) while buffering function call outputs (see arg buffer logic in [`OpenaiService`](src/openai/openai.service.ts) and SSE publishing in [`BaseAgentService`](src/base-agent/base-agent.service.ts)). This keeps UX responsive and allows progressive UI updates.
-- Small, validated function payloads: function inputs are minimal (e.g., coin name), validated using utilities like [`checkProperty`](src/shared/util/checkProperty.util.ts) to avoid malformed API calls and to keep the model’s function arguments simple and predictable.
-- Deterministic post-processing: processors return JSON strings (not free-form text) so the system can combine and format results reliably before presenting them to users.
+```bash
+npm run start:dev     # watch mode
+npm run start:prod    # node dist/main
+npm run build
+npm run lint
+npm run format
+npm test              # jest (src/**/*.spec.ts)
+```
 
-Referenced files and symbols:
-- [`OpenaiService`](src/openai/openai.service.ts)
-- [`BaseAgentService`](src/base-agent/base-agent.service.ts)
-- [`BaseAgentController`](src/base-agent/base-agent.controller.ts)
-- [`cryptoAgentDefinition`](src/agents/crypto-agent/crypto.agent-def.ts)
-- [`cryptoAgentFunctions`](src/agents/crypto-agent/agentFunctions.ts)
-- [`CoinFunctionProcessor`](src/agents/crypto-agent/functions/coin/coin.function-processor.ts)
-- [`TrendingCoinFunctionProcessor`](src/agents/crypto-agent/functions/trending-coin/trendingCoin.function.processor.ts)
-- [`crypto.api-client.ts`](src/agents/crypto-agent/apiClient/crypto.api-client.ts)
-- [`checkProperty`](src/shared/util/checkProperty.util.ts)
+## Notes and rough edges
 
-## Scaling to 1,000,000+ rows — Elasticsearch-first plan
-Rationale: for queries like "give me the best crypto" or "which coins are trending", you want deterministic, fast retrieval and aggregations. Elasticsearch is ideal because it supports full-text search, filters, aggregations, and scoring — so the model only receives the exact small set of results it needs.
-
-Key steps
-- Index design
-  - Use explicit mappings, appropriate analyzers, and keyword vs text fields.
-  - Index commonly queried metrics (price, volume, market_cap, tags) and store precomputed aggregates when possible.
-- Sharding & replicas
-  - Choose shard count by expected index size and node resources; use replicas for read throughput.
-- Ingest & pipelines
-  - Use ingest pipelines to normalize data, add enrichments, and drop PII.
-  - Use data streams & ILM (hot-warm) for time-series retention and rollover.
-- Aggregations & rollups
-  - Precompute rollups (daily/weekly) and materialized aggregates for trending detection.
-  - Use ES aggregations for top-k, percentiles, correlations.
-- Candidate reduction
-  - Run precise ES queries + filters to produce a small candidate set (10–50 rows) that the LLM will evaluate.
-- Deterministic function outputs
-  - LLM calls a function that returns JSON (strict schema). The app uses that JSON to fetch full records or trigger actions (e.g., place orders).
-- Caching & hot paths
-  - Cache frequent queries/results (Redis) and use TTLs for freshness.
-- Backpressure & async
-  - Offload heavy analytics (correlation, anomaly detection) to background workers; surface quick summaries synchronously and deeper reports via async jobs.
-- Monitoring & ops
-  - Monitor search latency, recall, index size, shard health, cache hit rates, and model usage/costs.
-
-## Example usage (endpoints)
-- Create thread: POST /createThread (implemented by [`BaseAgentController.createThread`](src/base-agent/base-agent.controller.ts))
-- Stream response: SSE /:threadId?message=... (see [`BaseAgentController.sendStreamMessage`](src/base-agent/base-agent.controller.ts))
-- Get messages/history: GET /messages/:threadId (see [`BaseAgentController.getMessages`](src/base-agent/base-agent.controller.ts))
-
-## Notes
-- Keep function interfaces small and return deterministic JSON from processors. See [`CoinGptFunction`](src/agents/crypto-agent/functions/coin/coin.gpt-function.ts) and [`TrendingCoinGptFunction`](src/agents/crypto-agent/functions/trending-coin/trendingCoin.gpt-function.ts).
-- For production, secure API keys (already loaded by `ConfigModule.forRoot()` in [`AppModule`](src/app.module.ts)) and add rate-limits and auth.
-
-## Files to inspect
-- [src/openai/openai.service.ts](src/openai/openai.service.ts)
-- [src/agents/crypto-agent/crypto.agent-def.ts](src/agents/crypto-agent/crypto.agent-def.ts)
-- [src/agents/crypto-agent/agentFunctions.ts](src/agents/crypto-agent/agentFunctions.ts)
-- [src/agents/crypto-agent/functions/coin/coin.function-processor.ts](src/agents/crypto-agent/functions/coin/coin.function-processor.ts)
-- [src/agents/crypto-agent/functions/trending-coin/trendingCoin.function.processor.ts](src/agents/crypto-agent/functions/trending-coin/trendingCoin.function.processor.ts)
-- [src/base-agent/base-agent.service.ts](src/base-agent/base-agent.service.ts)
-- [src/base-agent/base-agent.controller.ts](src/base-agent/base-agent.controller.ts)
-
+- The agent model is pinned in the agent definition
+  (`model: 'gpt-5.4-mini'` in [contract.agent-def.ts](src/agents/contract-agent/contract.agent-def.ts)) —
+  change it there, not via env.
+- There is no auth, rate limiting, or request validation pipe on any endpoint.
+- The Make webhook IDs are hardcoded in each processor; they should move to config
+  before this runs anywhere shared.
+- `MAX_ROUNDS` is 5 — an agent that needs a sixth tool round reports an error
+  through `onError`.
+- Tool results are streamed back but the HTTP response only returns the final
+  assembled text; `onDelta`/`onToolCall` are the hooks for real-time UI.
+- The date is injected as the first user message (Asia/Tbilisi) so relative terms
+  in a contract resolve correctly.
