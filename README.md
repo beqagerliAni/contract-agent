@@ -169,8 +169,6 @@ npm run start:dev         # http://localhost:3001
 | `OPENAI_EMBEDDINGS_MODEL` | no | defaults to `text-embedding-3-small` |
 | `PORT` | no | defaults to `3001` |
 
-Note that `.env.example` currently lists only the first two — the webhook key and
-the embeddings model are read directly from `process.env`.
 
 ### Scripts
 
@@ -180,20 +178,4 @@ npm run start:prod    # node dist/main
 npm run build
 npm run lint
 npm run format
-npm test              # jest (src/**/*.spec.ts)
 ```
-
-## Notes and rough edges
-
-- The agent model is pinned in the agent definition
-  (`model: 'gpt-5.4-mini'` in [contract.agent-def.ts](src/agents/contract-agent/contract.agent-def.ts)) —
-  change it there, not via env.
-- There is no auth, rate limiting, or request validation pipe on any endpoint.
-- The Make webhook IDs are hardcoded in each processor; they should move to config
-  before this runs anywhere shared.
-- `MAX_ROUNDS` is 5 — an agent that needs a sixth tool round reports an error
-  through `onError`.
-- Tool results are streamed back but the HTTP response only returns the final
-  assembled text; `onDelta`/`onToolCall` are the hooks for real-time UI.
-- The date is injected as the first user message (Asia/Tbilisi) so relative terms
-  in a contract resolve correctly.
